@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchGrade — MLB Betting Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<style>
+  body { font-family: 'Inter', sans-serif; }
+  .display { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.01em; }
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div style="padding:24px;font-family:monospace;font-size:13px;color:#555;">Loading…</div>
+</div>
+
+<script>
+  // Surface any error directly on the page instead of a silent blank screen
+  window.addEventListener('error', function (e) {
+    document.getElementById('root').innerHTML =
+      '<pre style="padding:20px;color:#c0392b;white-space:pre-wrap;font-family:monospace;font-size:12px;line-height:1.5;">' +
+      'Something failed to load:\n\n' + (e.message || e) +
+      (e.filename ? ('\n\nFile: ' + e.filename + ':' + e.lineno) : '') +
+      '</pre>';
+  });
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+/* ---- small inline icons (no external icon package needed) ---- */
+function Icon({ children, size = 14, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {children}
+    </svg>
+  );
+}
+const CircleI = (p) => <Icon {...p}><circle cx="12" cy="12" r="9" /></Icon>;
+const CircleDotI = (p) => <Icon {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /></Icon>;
+const TrendingUpI = (p) => <Icon {...p}><polyline points="3 17 9 11 13 15 21 6" /><polyline points="15 6 21 6 21 12" /></Icon>;
+const StarI = (p) => <Icon {...p}><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9" /></Icon>;
+const BarChart3I = (p) => <Icon {...p}><line x1="4" y1="20" x2="4" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="20" y1="20" x2="20" y2="14" /></Icon>;
+const CheckCircle2I = (p) => <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M8 12l3 3 5-6" /></Icon>;
+const ActivityI = (p) => <Icon {...p}><polyline points="2 12 7 12 10 20 14 4 17 12 22 12" /></Icon>;
+const ChevronLeftI = (p) => <Icon {...p}><polyline points="14 6 8 12 14 18" /></Icon>;
+const ChevronRightI = (p) => <Icon {...p}><polyline points="10 6 16 12 10 18" /></Icon>;
+const WindI = (p) => <Icon {...p}><path d="M3 8h11a3 3 0 1 0-3-3" /><path d="M3 14h15a3 3 0 1 1-3 3" /></Icon>;
+const ThermometerI = (p) => <Icon {...p}><path d="M12 3a2 2 0 0 0-2 2v9.5a4 4 0 1 0 4 0V5a2 2 0 0 0-2-2z" /></Icon>;
+const AlertTriangleI = (p) => <Icon {...p}><path d="M12 3 2 20h20L12 3z" /><line x1="12" y1="9" x2="12" y2="14" /><circle cx="12" cy="17" r="0.7" fill="currentColor" /></Icon>;
+
+/* ---- data source: calls our own /api/propline proxy, never PropLine directly ---- */
+async function fetchMlbEvents() {
+  const res = await fetch("/api/propline?path=/sports/baseball_mlb/events");
+  if (!res.ok) throw new Error("proxy request failed");
+  return res.json();
+}
+
+const NAV = [
+  { label: "Games", icon: CircleI },
+  { label: "Release", icon: CheckCircle2I },
+  { label: "HR games", icon: TrendingUpI },
+  { label: "Props", icon: StarI },
+  { label: "Pitchers", icon: ActivityI },
+  { label: "Saved", icon: CircleDotI },
+  { label: "Results", icon: BarChart3I },
+];
+
+const SAMPLE_GAMES = [
+  { matchup: "TB @ BAL", market: "Total 8.5", model: "Under 8.5", edge: 6.2, conf: "High", pitchers: "Eflin / Rodriguez" },
+  { matchup: "SEA @ HOU", market: "ML", model: "SEA +118", edge: 4.8, conf: "High", pitchers: "Gilbert / Valdez" },
+  { matchup: "ATL @ NYM", market: "F5 Total 4.5", model: "Over 4.5", edge: 3.9, conf: "Medium", pitchers: "Sale / Senga" },
+  { matchup: "LAD @ SD", market: "Total 8", model: "Over 8", edge: 3.1, conf: "Medium", pitchers: "Glasnow / Musgrove" },
+  { matchup: "MIN @ CLE", market: "RL -1.5", model: "MIN -1.5", edge: 2.4, conf: "Medium", pitchers: "Lopez / Bibee" },
+  { matchup: "PHI @ CHC", market: "ML", model: "PHI -142", edge: 2.0, conf: "Low", pitchers: "Wheeler / Steele" },
+];
+
+const DIAMOND = [
+  { player: "Corbin Burnes", line: "O 5.5 Ks", cushion: "+1.4", team: "BAL" },
+  { player: "Zac Gallen", line: "O 6.5 Ks", cushion: "+1.1", team: "ARI" },
+  { player: "Framber Valdez", line: "U 1.5 BB", cushion: "+0.9", team: "HOU" },
+  { player: "Tarik Skubal", line: "O 7.5 Ks", cushion: "+0.8", team: "DET" },
+  { player: "Logan Gilbert", line: "O 6.5 Ks", cushion: "+0.7", team: "SEA" },
+];
+
+const RELEASE = [
+  { matchup: "TB @ BAL", gate: "Lineups confirmed", status: "Cleared", time: "6:05p" },
+  { matchup: "SEA @ HOU", gate: "Price stable 15m", status: "Cleared", time: "8:10p" },
+  { matchup: "ATL @ NYM", gate: "Starter confirmed", status: "Cleared", time: "7:10p" },
+  { matchup: "NYY @ BOS", gate: "Awaiting lineup", status: "Pending", time: "7:05p" },
+  { matchup: "SF @ ARI", gate: "Price volatility", status: "Held", time: "9:40p" },
+];
+
+const HR_GAMES = [
+  { g: "SD @ COL", park: "Coors Field", wind: "Out 9mph", temp: "81°F", proj: 10.8, score: 91 },
+  { g: "ATL @ CIN", park: "GABP", wind: "Calm", temp: "84°F", proj: 9.2, score: 84 },
+  { g: "NYY @ BOS", park: "Fenway Park", wind: "In 4mph", temp: "77°F", proj: 8.6, score: 79 },
+  { g: "TEX @ LAA", park: "Angel Stadium", wind: "Out 6mph", temp: "79°F", proj: 8.1, score: 74 },
+  { g: "MIL @ PIT", park: "PNC Park", wind: "Cross 5mph", temp: "73°F", proj: 7.4, score: 68 },
+];
+
+const PROPS = [
+  { player: "Aaron Judge", prop: "Total bases", line: "1.5", pick: "Over", edge: 5.4 },
+  { player: "Ronald Acuña Jr.", prop: "Hits + Runs + RBI", line: "2.5", pick: "Over", edge: 4.7 },
+  { player: "Shohei Ohtani", prop: "Home runs", line: "0.5", pick: "Over", edge: 3.8 },
+  { player: "Bobby Witt Jr.", prop: "Stolen bases", line: "0.5", pick: "Over", edge: 3.2 },
+  { player: "Juan Soto", prop: "Total bases", line: "1.5", pick: "Under", edge: 2.6 },
+];
+
+const PITCHERS = [
+  { name: "Tarik Skubal", team: "DET", opp: "vs CWS", proj_k: 8.1, era: 2.21, whip: 0.92 },
+  { name: "Zac Gallen", team: "ARI", opp: "vs MIA", proj_k: 7.4, era: 3.05, whip: 1.08 },
+  { name: "Corbin Burnes", team: "BAL", opp: "vs TB", proj_k: 6.9, era: 2.88, whip: 1.02 },
+  { name: "Framber Valdez", team: "HOU", opp: "vs SEA", proj_k: 6.2, era: 3.12, whip: 1.15 },
+  { name: "Logan Gilbert", team: "SEA", opp: "@ HOU", proj_k: 7.0, era: 3.34, whip: 1.06 },
+];
+
+const RESULTS = [
+  { date: "Aug 3", matchup: "NYY @ TOR", pick: "NYY -1.5", result: "Win", units: "+1.9" },
+  { date: "Aug 3", matchup: "SD @ SF", pick: "Under 7.5", result: "Win", units: "+1.7" },
+  { date: "Aug 2", matchup: "ATL @ WSH", pick: "ATL ML", result: "Loss", units: "-1.0" },
+  { date: "Aug 2", matchup: "HOU @ TEX", pick: "Over 8", result: "Win", units: "+1.8" },
+  { date: "Aug 1", matchup: "LAD @ COL", pick: "LAD -1.5", result: "Push", units: "0.0" },
+];
+
+const STEPS = [
+  { n: "IN", t: "Ingest", d: "Schedules, prices, probable starters and team context pulled from live public feeds." },
+  { n: "NM", t: "Normalize", d: "Remove vig, compare implied probability and adjust for availability and venue." },
+  { n: "SM", t: "Simulate", d: "Run price-sensitive outcomes and stress-test the assumptions behind each edge." },
+  { n: "RK", t: "Rank", d: "Surface only actionable discrepancies with a transparent confidence score." },
+];
+
+function Digit({ children }) {
+  return (
+    <span className="inline-block bg-[#FFF4E0] border border-[#F0C674] rounded px-1.5 py-0.5 font-mono text-[#B4620C] text-sm tabular-nums">
+      {children}
+    </span>
+  );
+}
+
+function ConfDots({ level }) {
+  const n = level === "High" ? 3 : level === "Medium" ? 2 : 1;
+  return (
+    <span className="inline-flex gap-1 align-middle">
+      {[0, 1, 2].map((i) => (
+        <span key={i} className={`h-1.5 w-1.5 rounded-full ${i < n ? "bg-[#1F9D5C]" : "bg-[#D8E5DE]"}`} />
+      ))}
+    </span>
+  );
+}
+
+function Th({ children, right }) {
+  return <th className={`px-4 py-2.5 font-normal ${right ? "text-right" : "text-left"}`}>{children}</th>;
+}
+
+function StatusPill({ status }) {
+  const map = {
+    Cleared: "bg-[#E7F7EE] text-[#1F9D5C] border-[#A9E0C1]",
+    Pending: "bg-[#FFF4E0] text-[#B4620C] border-[#F0C674]",
+    Held: "bg-[#FCE9E9] text-[#C43E3E] border-[#F0AFAF]",
+  };
+  return <span className={`px-2 py-0.5 rounded text-[11px] border ${map[status]}`}>{status}</span>;
+}
+
+function PitchGrade() {
+  const [tab, setTab] = useState("Games");
+  const [clock, setClock] = useState(new Date());
+  const [games, setGames] = useState(SAMPLE_GAMES);
+  const [live, setLive] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMlbEvents()
+      .then((events) => {
+        if (cancelled || !Array.isArray(events) || events.length === 0) return;
+        const mapped = events.slice(0, 8).map((e) => ({
+          matchup: `${e.away_team ?? "AWAY"} @ ${e.home_team ?? "HOME"}`,
+          market: "—",
+          model: "—",
+          edge: null,
+          conf: "—",
+          pitchers: "—",
+        }));
+        setGames(mapped);
+        setLive(true);
+      })
+      .catch(() => setLoadError(true));
+    return () => { cancelled = true; };
+  }, []);
+
+  const timeStr = clock.toLocaleTimeString("en-US", { hour12: true });
+  const dateStr = clock.toLocaleDateString("en-CA");
+
+  return (
+    <div className="min-h-screen w-full bg-[#FBFDFC] text-[#12241C]">
+      {!live && (
+        <div className="bg-[#FFF4E0] border-b border-[#F0C674] px-5 py-2 text-[12px] text-[#8A5A0C] flex items-center justify-center gap-2">
+          <AlertTriangleI size={13} />
+          {loadError
+            ? "Showing sample data — /api/propline isn't reachable yet."
+            : "Showing sample data — checking live feed…"}
+        </div>
+      )}
+
+      <div className="border-b border-[#E1EAE4] bg-white/95 sticky top-0 z-20 backdrop-blur">
+        <div className="max-w-7xl mx-auto px-5 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <div className="h-7 w-7 rounded-sm bg-[#E8871E] flex items-center justify-center">
+              <span className="text-white font-bold text-xs display">P</span>
+            </div>
+            <span className="display text-lg font-semibold tracking-wide">
+              PITCH<span className="text-[#E8871E]">GRADE</span>
+              <span className="text-[#6C8577] text-[11px] ml-2 font-normal tracking-widest uppercase">MLB Intelligence</span>
+            </span>
+          </div>
+          <div className="hidden md:flex items-center gap-1 mono text-[11px] text-[#48604F]">
+            <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-[#1F9D5C] animate-pulse" : "bg-[#B4620C]"}`} />
+            {live ? "LIVE" : "SAMPLE"}&nbsp;
+            <Digit>{timeStr}</Digit>
+            <span className="ml-1">ET</span>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-5 flex gap-5 overflow-x-auto no-scrollbar border-t border-[#E1EAE4]">
+          {NAV.map(({ label, icon: IconC }) => (
+            <button
+              key={label}
+              onClick={() => setTab(label)}
+              className={`flex items-center gap-1.5 text-[12px] py-2.5 whitespace-nowrap border-b-2 transition-colors ${
+                tab === label ? "border-[#E8871E] text-[#12241C]" : "border-transparent text-[#6C8577] hover:text-[#12241C]"
+              }`}
+            >
+              <IconC size={13} />
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-5 pt-4">
+        <div className={`border rounded-md px-4 py-2.5 flex items-center justify-between text-[12px] ${live ? "border-[#A9E0C1] bg-[#E7F7EE]" : "border-[#F0C674] bg-[#FFF4E0]"}`}>
+          <div className="flex items-center gap-2">
+            <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-[#1F9D5C]" : "bg-[#B4620C]"}`} />
+            <span className="text-[#12241C] font-medium">Data health</span>
+            <span className="text-[#3E5A48]">— {live ? "provider network synced, cache current" : "using sample data, backend proxy not connected"}</span>
+          </div>
+          <span className="text-[#3E5A48] mono text-[11px]">DETAILS →</span>
+        </div>
+      </div>
+
+      {tab === "Games" && (
+        <div className="max-w-7xl mx-auto px-5 pt-10 pb-8">
+          <div className="mono text-[11px] text-[#B4620C] tracking-widest uppercase mb-3">MLB Quant Lab · {dateStr}</div>
+          <h1 className="display text-5xl md:text-6xl font-semibold leading-[0.95] max-w-3xl text-[#12241C]">
+            Baseball, modeled <span className="text-[#1F9D5C]">pitch by pitch.</span>
+          </h1>
+          <p className="text-[#3E5A48] mt-4 max-w-xl text-[15px] leading-relaxed">
+            One daily board for verified prices, confirmed lineups and matchup-adjusted MLB projections — evidence first, no manufactured picks.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-8 max-w-3xl">
+            {[
+              { label: "MLB games", sub: "official daily slate", val: String(games.length) },
+              { label: "Verified prices", sub: "confirmed & cached", val: live ? "—" : "142" },
+              { label: "Real player props", sub: "live from providers", val: live ? "—" : "68" },
+            ].map((c) => (
+              <div key={c.label} className="border border-[#E1EAE4] bg-white rounded-md px-4 py-3 shadow-sm">
+                <div className="mono text-2xl font-medium text-[#12241C]">{c.val}</div>
+                <div className="text-[12px] text-[#12241C] mt-1">{c.label}</div>
+                <div className="text-[11px] text-[#6C8577]">{c.sub}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-5">
+        <div className="flex items-center gap-1 border-b border-[#E1EAE4] overflow-x-auto no-scrollbar pt-4">
+          {NAV.map(({ label }) => (
+            <button
+              key={label}
+              onClick={() => setTab(label)}
+              className={`px-3.5 py-2.5 text-[12.5px] whitespace-nowrap border-b-2 transition-colors ${
+                tab === label ? "border-[#E8871E] text-[#12241C]" : "border-transparent text-[#6C8577] hover:text-[#12241C]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-2 text-[#6C8577] pr-2">
+            <ChevronLeftI size={14} />
+            <span className="text-[11px] mono">TODAY</span>
+            <ChevronRightI size={14} />
+          </div>
+        </div>
+      </div>
+
+      {tab === "Games" && (
+        <React.Fragment>
+          <div className="max-w-7xl mx-auto px-5 py-8 grid lg:grid-cols-5 gap-6">
+            <div className="lg:col-span-3">
+              <div className="flex items-baseline justify-between mb-1">
+                <h2 className="display text-2xl font-semibold">Top qualified bets</h2>
+                <span className="mono text-[10px] text-[#6C8577] uppercase tracking-widest">Daily shortlist</span>
+              </div>
+              <p className="text-[#6C8577] text-[13px] mb-4 max-w-md">
+                The engine returns zero, two or five picks. Every selection clears all hard release gates — no daily quota is manufactured.
+              </p>
+              <div className="border border-[#E1EAE4] rounded-md overflow-hidden bg-white shadow-sm">
+                <div className="bg-[#FFF4E0] px-4 py-2 flex items-center gap-2 text-[11px] mono uppercase tracking-widest text-[#B4620C]">
+                  <span>◆ Diamond tier</span>
+                  <span className="text-[#8A6A3C] normal-case tracking-normal">— top 5 pitcher overs, ranked by projection cushion</span>
+                </div>
+                <table className="w-full text-[13px]">
+                  <tbody>
+                    {DIAMOND.map((row, i) => (
+                      <tr key={row.player} className={i % 2 ? "bg-[#F7FAF8]" : "bg-white"}>
+                        <td className="px-4 py-2.5 text-[#6C8577] mono w-6">{i + 1}</td>
+                        <td className="px-4 py-2.5 font-medium">{row.player}</td>
+                        <td className="px-4 py-2.5 text-[#6C8577]">{row.team}</td>
+                        <td className="px-4 py-2.5">{row.line}</td>
+                        <td className="px-4 py-2.5 text-right text-[#1F9D5C] mono font-medium">{row.cushion}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="lg:col-span-2">
+              <h2 className="display text-2xl font-semibold mb-1">Best games for home runs</h2>
+              <p className="text-[#6C8577] text-[13px] mb-4">Park, weather, offense and starter vulnerability, scored together.</p>
+              <div className="border border-[#E1EAE4] bg-white rounded-md p-4 space-y-3 shadow-sm">
+                {HR_GAMES.slice(0, 3).map((r) => (
+                  <div key={r.g} className="flex items-center justify-between border-b border-[#E1EAE4] last:border-0 pb-3 last:pb-0">
+                    <div>
+                      <div className="font-medium text-[13.5px]">{r.g}</div>
+                      <div className="text-[11.5px] text-[#6C8577]">{r.park} · {r.wind}</div>
+                    </div>
+                    <div className="mono text-[#B4620C] text-sm font-medium">{r.score}</div>
+                  </div>
+                ))}
+                <button onClick={() => setTab("HR games")} className="text-[12px] text-[#1F9D5C] mono uppercase tracking-wide pt-1 font-medium">
+                  Open HR game lab →
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-5 pb-10">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div>
+                <h2 className="display text-2xl font-semibold">Today's board</h2>
+                <span className="text-[11px] text-[#6C8577] mono">MLB only · {dateStr} · {games.length} games {live ? "loaded" : "priced (sample)"}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <span className="text-[#6C8577] mono uppercase mr-1">Min edge</span>
+                {["Any", "2%+", "4%+", "6%+"].map((f) => (
+                  <button key={f} className="px-2.5 py-1 rounded border border-[#E1EAE4] text-[#6C8577] hover:text-[#12241C] hover:border-[#1F9D5C] transition-colors bg-white">
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+              <table className="w-full text-[13px] min-w-[640px]">
+                <thead>
+                  <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                    <Th>Matchup</Th><Th>Market</Th><Th>Model pick</Th><Th>Pitchers</Th><Th right>Edge</Th><Th right>Conf.</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {games.map((g, i) => (
+                    <tr key={g.matchup} className={`border-b border-[#E1EAE4] last:border-0 hover:bg-[#FFF4E0]/40 transition-colors ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                      <td className="px-4 py-3 font-medium">{g.matchup}</td>
+                      <td className="px-4 py-3 text-[#3E5A48]">{g.market}</td>
+                      <td className="px-4 py-3 text-[#B4620C] font-medium">{g.model}</td>
+                      <td className="px-4 py-3 text-[#6C8577] text-[12px]">{g.pitchers}</td>
+                      <td className="px-4 py-3 text-right mono text-[#1F9D5C] font-medium">{g.edge != null ? `+${g.edge}%` : "—"}</td>
+                      <td className="px-4 py-3 text-right">{g.conf === "—" ? <span className="text-[#6C8577]">—</span> : <ConfDots level={g.conf} />}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </React.Fragment>
+      )}
+
+      {tab === "Release" && (
+        <div className="max-w-7xl mx-auto px-5 py-8">
+          <h2 className="display text-2xl font-semibold mb-1">Release desk</h2>
+          <p className="text-[#6C8577] text-[13px] mb-4">Every game must clear its gates before a pick is released publicly.</p>
+          <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+            <table className="w-full text-[13px] min-w-[560px]">
+              <thead>
+                <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                  <Th>Matchup</Th><Th>Gate</Th><Th>First pitch</Th><Th right>Status</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {RELEASE.map((r, i) => (
+                  <tr key={r.matchup} className={`border-b border-[#E1EAE4] last:border-0 ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                    <td className="px-4 py-3 font-medium">{r.matchup}</td>
+                    <td className="px-4 py-3 text-[#3E5A48]">{r.gate}</td>
+                    <td className="px-4 py-3 text-[#6C8577] mono">{r.time}</td>
+                    <td className="px-4 py-3 text-right"><StatusPill status={r.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "HR games" && (
+        <div className="max-w-7xl mx-auto px-5 py-8">
+          <h2 className="display text-2xl font-semibold mb-1">HR game lab</h2>
+          <p className="text-[#6C8577] text-[13px] mb-4">Park factors, wind and offense scored together for home run environment.</p>
+          <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+            <table className="w-full text-[13px] min-w-[640px]">
+              <thead>
+                <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                  <Th>Matchup</Th><Th>Park</Th><Th>Wind</Th><Th>Temp</Th><Th right>Proj. runs</Th><Th right>Score</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {HR_GAMES.map((r, i) => (
+                  <tr key={r.g} className={`border-b border-[#E1EAE4] last:border-0 ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                    <td className="px-4 py-3 font-medium">{r.g}</td>
+                    <td className="px-4 py-3 text-[#3E5A48]">{r.park}</td>
+                    <td className="px-4 py-3 text-[#6C8577]"><WindI size={12} className="inline mr-1 -mt-0.5" />{r.wind}</td>
+                    <td className="px-4 py-3 text-[#6C8577]"><ThermometerI size={12} className="inline mr-1 -mt-0.5" />{r.temp}</td>
+                    <td className="px-4 py-3 text-right mono text-[#3E5A48]">{r.proj}</td>
+                    <td className="px-4 py-3 text-right mono text-[#B4620C] font-medium">{r.score}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "Props" && (
+        <div className="max-w-7xl mx-auto px-5 py-8">
+          <h2 className="display text-2xl font-semibold mb-1">Prop lab</h2>
+          <p className="text-[#6C8577] text-[13px] mb-4">Player props with model-implied edge versus posted lines.</p>
+          <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+            <table className="w-full text-[13px] min-w-[560px]">
+              <thead>
+                <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                  <Th>Player</Th><Th>Prop</Th><Th>Line</Th><Th>Pick</Th><Th right>Edge</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {PROPS.map((r, i) => (
+                  <tr key={r.player} className={`border-b border-[#E1EAE4] last:border-0 ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                    <td className="px-4 py-3 font-medium">{r.player}</td>
+                    <td className="px-4 py-3 text-[#3E5A48]">{r.prop}</td>
+                    <td className="px-4 py-3 text-[#6C8577] mono">{r.line}</td>
+                    <td className="px-4 py-3 text-[#B4620C] font-medium">{r.pick}</td>
+                    <td className="px-4 py-3 text-right mono text-[#1F9D5C] font-medium">+{r.edge}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "Pitchers" && (
+        <div className="max-w-7xl mx-auto px-5 py-8">
+          <h2 className="display text-2xl font-semibold mb-1">Pitching lab</h2>
+          <p className="text-[#6C8577] text-[13px] mb-4">Multi-season pitcher projections adjusted for today's matchup.</p>
+          <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+            <table className="w-full text-[13px] min-w-[560px]">
+              <thead>
+                <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                  <Th>Pitcher</Th><Th>Team</Th><Th>Matchup</Th><Th right>Proj. Ks</Th><Th right>ERA</Th><Th right>WHIP</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {PITCHERS.map((r, i) => (
+                  <tr key={r.name} className={`border-b border-[#E1EAE4] last:border-0 ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                    <td className="px-4 py-3 font-medium">{r.name}</td>
+                    <td className="px-4 py-3 text-[#6C8577]">{r.team}</td>
+                    <td className="px-4 py-3 text-[#3E5A48]">{r.opp}</td>
+                    <td className="px-4 py-3 text-right mono text-[#B4620C]">{r.proj_k}</td>
+                    <td className="px-4 py-3 text-right mono text-[#3E5A48]">{r.era}</td>
+                    <td className="px-4 py-3 text-right mono text-[#3E5A48]">{r.whip}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "Saved" && (
+        <div className="max-w-7xl mx-auto px-5 py-16 text-center">
+          <CircleDotI size={28} className="mx-auto text-[#B7CBBE] mb-3" />
+          <h2 className="display text-2xl font-semibold mb-1">Nothing saved yet</h2>
+          <p className="text-[#6C8577] text-[13px] max-w-sm mx-auto">
+            Star a game, prop or pitcher from any tab and it'll show up here for quick access.
+          </p>
+        </div>
+      )}
+
+      {tab === "Results" && (
+        <div className="max-w-7xl mx-auto px-5 py-8">
+          <h2 className="display text-2xl font-semibold mb-1">Results</h2>
+          <p className="text-[#6C8577] text-[13px] mb-4">Closed picks, graded against final prices.</p>
+          <div className="border border-[#E1EAE4] rounded-md overflow-x-auto bg-white shadow-sm">
+            <table className="w-full text-[13px] min-w-[560px]">
+              <thead>
+                <tr className="text-[10.5px] mono uppercase tracking-widest text-[#6C8577] border-b border-[#E1EAE4] bg-[#F7FAF8]">
+                  <Th>Date</Th><Th>Matchup</Th><Th>Pick</Th><Th right>Result</Th><Th right>Units</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {RESULTS.map((r, i) => (
+                  <tr key={r.matchup + r.date} className={`border-b border-[#E1EAE4] last:border-0 ${i % 2 ? "bg-[#F7FAF8]" : "bg-white"}`}>
+                    <td className="px-4 py-3 text-[#6C8577] mono">{r.date}</td>
+                    <td className="px-4 py-3 font-medium">{r.matchup}</td>
+                    <td className="px-4 py-3 text-[#3E5A48]">{r.pick}</td>
+                    <td className={`px-4 py-3 text-right font-medium ${r.result === "Win" ? "text-[#1F9D5C]" : r.result === "Loss" ? "text-[#C43E3E]" : "text-[#6C8577]"}`}>{r.result}</td>
+                    <td className="px-4 py-3 text-right mono">{r.units}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="border-t border-[#E1EAE4] bg-[#F7FAF8]">
+        <div className="max-w-7xl mx-auto px-5 py-12">
+          <div className="mono text-[11px] text-[#B4620C] tracking-widest uppercase mb-2">How PitchGrade thinks</div>
+          <h2 className="display text-3xl font-semibold mb-8 max-w-lg">A pick is only as good as the evidence behind it.</h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {STEPS.map((s) => (
+              <div key={s.t} className="border border-[#E1EAE4] rounded-md p-4 bg-white shadow-sm">
+                <div className="mono text-[#1F9D5C] text-xs tracking-widest mb-3">{s.n}</div>
+                <div className="display text-lg font-semibold mb-1.5">{s.t}</div>
+                <p className="text-[12.5px] text-[#6C8577] leading-relaxed">{s.d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-[#E1EAE4] px-5 py-6 bg-white">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+          <span className="display font-semibold tracking-wide text-[#6C8577]">
+            PITCH<span className="text-[#E8871E]">GRADE</span>
+          </span>
+          <p className="text-[11.5px] text-[#6C8577]">Decision support, not a guarantee. Lines move. Verify prices and bet responsibly.</p>
+          <span className="mono text-[10.5px] text-[#6C8577]">model 2026.3 · engine 2.1</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<PitchGrade />);
+</script>
+</body>
+</html>
